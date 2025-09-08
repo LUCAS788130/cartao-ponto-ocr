@@ -1,6 +1,5 @@
 streamlit
 pdfplumber
 pandas
-easyocr
-pdf2image
-Pillow
+pillow
+pytesseract
