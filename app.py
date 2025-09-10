@@ -166,106 +166,62 @@ def processar_layout_novo(texto):
     return pd.DataFrame(estrutura)
 
 # --------------------------
-# Layout CAIXA - SIPON (ajustado para mês/ano por página)
+# Layout CAIXA - SIPON (ajustado)
 # --------------------------
 def processar_layout_caixa(texto):
     linhas = texto.split("\n")
-    registros = []
-
+    registros_dict = {}  # chave: data, valor: lista de horários
     ocorrencias_que_zeram = ["FERIADO","FALTA","ABN/DEC.CHEFIA","LICENÇA","D.S.R"]
 
-    dia_atual = None
-    horarios_dia = []
-    mes, ano = None, None  # inicializa mês/ano por página
-
-    # Verifica se existe indicação de mês/ano nesta página
+    # Detecta mês/ano da página
     mes_ano = re.search(r"Mes/Ano\s*:\s*(\d+)\s*/\s*(\d+)", texto)
-    if mes_ano:
-        mes, ano = int(mes_ano.group(1)), int(mes_ano.group(2))
-    else:
-        mes, ano = 1, 2000  # padrão caso não encontre
+    mes, ano = (int(mes_ano.group(1)), int(mes_ano.group(2))) if mes_ano else (1, 2000)
+
+    dia_atual = None
 
     for linha in linhas:
+        linha_upper = linha.upper()
+
+        # Ignora linhas de contagem de tempo
+        if "QTDE" in linha_upper or "QUANTIDADE" in linha_upper:
+            continue
+
+        # Detecta nova data
         match = re.match(r"\s*(\d{1,2})\s*-\s*[A-Z]{3}", linha.strip())
         if match:
-            if dia_atual:
-                registros.append((dia_atual, horarios_dia[:12]))
             dia = int(match.group(1))
             dia_atual = f"{dia:02d}/{mes:02d}/{ano}"
-            horarios_dia = []
-
-            linha_upper = linha.upper()
             if any(oc in linha_upper for oc in ocorrencias_que_zeram):
-                registros.append((dia_atual, []))
+                registros_dict[dia_atual] = []  # zera horários do dia
                 dia_atual = None
                 continue
-
             horarios = re.findall(r"\d{2}:\d{2}", linha)
-            if horarios: horarios = horarios[1:]  # ignora Jornada
-            horarios_dia.extend(horarios)
+            if horarios:
+                horarios = horarios[1:]  # ignora Jornada
+                registros_dict[dia_atual] = horarios
         else:
+            # Acumula horários de linhas seguintes do mesmo dia
             if dia_atual:
                 horarios_extra = re.findall(r"\d{2}:\d{2}", linha)
-                horarios_dia.extend(horarios_extra)
+                registros_dict.setdefault(dia_atual, [])
+                registros_dict[dia_atual].extend(horarios_extra)
 
-    if dia_atual:
-        registros.append((dia_atual, horarios_dia[:12]))
-
-    if not registros: return pd.DataFrame()
+    # Criar DataFrame com 6 pares de entrada/saída
     estrutura = {"Data":[]}
-    for i in range(1,7): estrutura[f"Entrada{i}"]=[]; estrutura[f"Saída{i}"]=[]
+    for i in range(1,7):
+        estrutura[f"Entrada{i}"]=[]
+        estrutura[f"Saída{i}"]=[]
 
-    for data, horarios in registros:
+    for data, horarios in registros_dict.items():
         estrutura["Data"].append(data)
-        pares = horarios + [""]*(12-len(horarios))
+        pares = horarios[:12] + [""]*(12-len(horarios[:12]))  # até 6 pares
         for i in range(6):
             estrutura[f"Entrada{i+1}"].append(pares[2*i])
             estrutura[f"Saída{i+1}"].append(pares[2*i+1])
+
     return pd.DataFrame(estrutura)
 
 # --------------------------
 # Principal
 # --------------------------
-if uploaded_file:
-    with st.spinner("⏳ Processando..."):
-        with pdfplumber.open(uploaded_file) as pdf:
-            texto_total = []
-            for page in pdf.pages:
-                texto_pagina = page.extract_text() or ""
-                texto_total.append(texto_pagina)
-        texto = "\n".join(texto_total)
-
-        layout = detectar_layout(texto)
-        if layout == "caixa":
-            # Processa cada página separadamente para pegar mês correto
-            dfs = []
-            with pdfplumber.open(uploaded_file) as pdf:
-                for page in pdf.pages:
-                    texto_pagina = page.extract_text() or ""
-                    df_pagina = processar_layout_caixa(texto_pagina)
-                    if not df_pagina.empty:
-                        dfs.append(df_pagina)
-            df = pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
-        elif layout == "novo":
-            df = processar_layout_novo(texto)
-        else:
-            df = processar_layout_antigo(texto)
-
-        if not df.empty:
-            st.success("✅ Conversão concluída com sucesso!")
-            st.dataframe(df, use_container_width=True)
-            csv = df.to_csv(index=False).encode("utf-8")
-            st.download_button("⬇️ Baixar CSV", data=csv, file_name="cartao_convertido.csv", mime="text/csv")
-        else:
-            st.warning("❌ Não foi possível extrair os dados do cartão.")
-
-# --------------------------
-# Rodapé
-# --------------------------
-st.markdown("""
-<div class="footer">
-🔒 Este site está em conformidade com a <strong>Lei Geral de Proteção de Dados (LGPD)</strong>.<br>
-Os arquivos enviados são utilizados apenas para conversão e não são armazenados nem compartilhados.<br>
-👨‍💻 Desenvolvido por <strong>Lucas de Matos Coelho</strong>
-</div>
-""", unsafe_allow_html=True)
+if
