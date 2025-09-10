@@ -224,4 +224,32 @@ def processar_layout_caixa(texto):
 # --------------------------
 # Principal
 # --------------------------
-if
+if uploaded_file:
+    with st.spinner("⏳ Processando..."):
+        with pdfplumber.open(uploaded_file) as pdf:
+            texto = "\n".join(page.extract_text() or "" for page in pdf.pages)
+        layout = detectar_layout(texto)
+        if layout == "caixa":
+            df = processar_layout_caixa(texto)
+        elif layout == "novo":
+            df = processar_layout_novo(texto)
+        else:
+            df = processar_layout_antigo(texto)
+        if not df.empty:
+            st.success("✅ Conversão concluída com sucesso!")
+            st.dataframe(df, use_container_width=True)
+            csv = df.to_csv(index=False).encode("utf-8")
+            st.download_button("⬇️ Baixar CSV", data=csv, file_name="cartao_convertido.csv", mime="text/csv")
+        else:
+            st.warning("❌ Não foi possível extrair os dados do cartão.")
+
+# --------------------------
+# Rodapé
+# --------------------------
+st.markdown("""
+<div class="footer">
+🔒 Este site está em conformidade com a <strong>Lei Geral de Proteção de Dados (LGPD)</strong>.<br>
+Os arquivos enviados são utilizados apenas para conversão e não são armazenados nem compartilhados.<br>
+👨‍💻 Desenvolvido por <strong>Lucas de Matos Coelho</strong>
+</div>
+""", unsafe_allow_html=True)
