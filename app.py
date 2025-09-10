@@ -144,7 +144,6 @@ def processar_layout_novo(texto):
             horarios = re.findall(r"\d{2}:\d{2}[a-z]?", parte_marcacoes)
             horarios = [h[:-1] if h[-1].isalpha() else h for h in horarios]
             horarios = [h for h in horarios if re.match(r"\d{2}:\d{2}", h)]
-            # Garante pares completos
             if len(horarios) % 2 != 0:
                 horarios = horarios[:-1]
             horarios = horarios[:12]
@@ -186,14 +185,12 @@ def processar_layout_caixa(texto_pdf):
             linha_strip = linha.strip()
             linha_upper = linha_strip.upper()
 
-            # Ignora linha de contagem ou que contenha QTDE
             if "QTDE" in linha_upper or "QUANTIDADE" in linha_upper:
                 continue
 
-            # Detecta nova data
             match = re.match(r"(\d{1,2})\s*-\s*[A-Z]{3}", linha_strip)
             if match:
-                if dia_atual and len(horarios_dia) >=2:
+                if dia_atual and len(horarios_dia) >= 2:
                     pares_validos = []
                     for i in range(0, len(horarios_dia), 2):
                         if i+1 < len(horarios_dia):
@@ -201,24 +198,27 @@ def processar_layout_caixa(texto_pdf):
                     registros_dict[dia_atual] = pares_validos
 
                 dia = int(match.group(1))
-                dia_atual = f"{dia:02d}/{mes:02d}/{ano}"
+                try:
+                    dia_atual = f"{dia:02d}/{mes:02d}/{ano}"
+                except:
+                    dia_atual = None
                 horarios_dia = []
 
                 if any(oc in linha_upper for oc in ["FERIADO","FALTA","ABN/DEC.CHEFIA","LICENÇA","D.S.R"]):
-                    registros_dict[dia_atual] = []
+                    if dia_atual:
+                        registros_dict[dia_atual] = []
                     dia_atual = None
                     continue
 
                 horarios = re.findall(r"\d{2}:\d{2}", linha_strip)
                 if horarios:
-                    horarios = horarios[1:]  # ignora Jornada
+                    horarios = horarios[1:]
                     horarios_dia.extend(horarios)
             else:
                 if dia_atual:
                     horarios_extra = re.findall(r"\b\d{2}:\d{2}\b", linha_strip)
                     horarios_dia.extend(horarios_extra)
 
-        # Último dia da página
         if dia_atual and len(horarios_dia) >= 2:
             pares_validos = []
             for i in range(0, len(horarios_dia), 2):
@@ -226,12 +226,18 @@ def processar_layout_caixa(texto_pdf):
                     pares_validos.append(horarios_dia[i:i+2])
             registros_dict[dia_atual] = pares_validos
 
+    # Remove datas inválidas
+    registros_dict = {d: pares for d, pares in registros_dict.items() if d and re.match(r"\d{2}/\d{2}/\d{4}", d)}
+
     estrutura = {"Data":[]}
     for i in range(1,7):
         estrutura[f"Entrada{i}"]=[]
         estrutura[f"Saída{i}"]=[]
 
-    for data, pares_list in sorted(registros_dict.items(), key=lambda x: datetime.strptime(x[0], "%d/%m/%Y")):
+    for data, pares_list in sorted(
+        registros_dict.items(),
+        key=lambda x: datetime.strptime(x[0], "%d/%m/%Y")
+    ):
         estrutura["Data"].append(data)
         pares = [h for par in pares_list for h in par] + [""]*(12 - sum(len(par) for par in pares_list))
         for i in range(6):
