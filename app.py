@@ -70,7 +70,7 @@ st.markdown("<h1>🕒 Conversor Inteligente de Cartão de Ponto</h1>", unsafe_al
 uploaded_file = st.file_uploader("📎 Envie o cartão de ponto em PDF", type="pdf")
 
 # --------------------------
-# Detectar layout
+# Detectar layout (uso interno)
 # --------------------------
 def detectar_layout(texto):
     if "SISTEMA DE PONTO ELETRONICO" in texto and "CAIXA - SIPON" in texto:
@@ -144,8 +144,7 @@ def processar_layout_novo(texto):
             horarios = re.findall(r"\d{2}:\d{2}[a-z]?", parte_marcacoes)
             horarios = [h[:-1] if h[-1].isalpha() else h for h in horarios]
             horarios = [h for h in horarios if re.match(r"\d{2}:\d{2}", h)]
-            if len(horarios) % 2 != 0:
-                horarios = horarios[:-1]
+            if len(horarios)%2 !=0: horarios = horarios[:-1]
             horarios = horarios[:12]
             registros.append((data_str, horarios))
     if not registros: return pd.DataFrame()
@@ -167,98 +166,61 @@ def processar_layout_novo(texto):
     return pd.DataFrame(estrutura)
 
 # --------------------------
-# Layout CAIXA - SIPON (corrigido e robusto)
+# Layout CAIXA - SIPON (ajustado para mês/ano por página)
 # --------------------------
-def processar_layout_caixa(texto_pdf):
-    registros_dict = {}
+def processar_layout_caixa(texto):
+    linhas = texto.split("\n")
+    registros = []
 
-    paginas = texto_pdf.split("\f")
-    for page_text in paginas:
-        linhas = page_text.split("\n")
-        mes_ano = re.search(r"Mes/Ano\s*:\s*(\d+)\s*/\s*(\d+)", page_text)
-        mes, ano = (int(mes_ano.group(1)), int(mes_ano.group(2))) if mes_ano else (1, 2000)
+    ocorrencias_que_zeram = ["FERIADO","FALTA","ABN/DEC.CHEFIA","LICENÇA","D.S.R"]
 
-        dia_atual = None
-        horarios_dia = []
+    dia_atual = None
+    horarios_dia = []
+    mes, ano = None, None  # inicializa mês/ano por página
 
-        for linha in linhas:
-            linha_strip = linha.strip()
-            linha_upper = linha_strip.upper()
+    # Verifica se existe indicação de mês/ano nesta página
+    mes_ano = re.search(r"Mes/Ano\s*:\s*(\d+)\s*/\s*(\d+)", texto)
+    if mes_ano:
+        mes, ano = int(mes_ano.group(1)), int(mes_ano.group(2))
+    else:
+        mes, ano = 1, 2000  # padrão caso não encontre
 
-            if "QTDE" in linha_upper or "QUANTIDADE" in linha_upper:
+    for linha in linhas:
+        match = re.match(r"\s*(\d{1,2})\s*-\s*[A-Z]{3}", linha.strip())
+        if match:
+            if dia_atual:
+                registros.append((dia_atual, horarios_dia[:12]))
+            dia = int(match.group(1))
+            dia_atual = f"{dia:02d}/{mes:02d}/{ano}"
+            horarios_dia = []
+
+            linha_upper = linha.upper()
+            if any(oc in linha_upper for oc in ocorrencias_que_zeram):
+                registros.append((dia_atual, []))
+                dia_atual = None
                 continue
 
-            match = re.match(r"(\d{1,2})\s*-\s*[A-Z]{3}", linha_strip)
-            if match:
-                # salva dia anterior
-                if dia_atual and len(horarios_dia) >= 2:
-                    pares_validos = []
-                    for i in range(0, len(horarios_dia), 2):
-                        if i+1 < len(horarios_dia):
-                            pares_validos.append(horarios_dia[i:i+2])
-                    if dia_atual in registros_dict:
-                        registros_dict[dia_atual].extend(pares_validos)
-                    else:
-                        registros_dict[dia_atual] = pares_validos
+            horarios = re.findall(r"\d{2}:\d{2}", linha)
+            if horarios: horarios = horarios[1:]  # ignora Jornada
+            horarios_dia.extend(horarios)
+        else:
+            if dia_atual:
+                horarios_extra = re.findall(r"\d{2}:\d{2}", linha)
+                horarios_dia.extend(horarios_extra)
 
-                dia = int(match.group(1))
-                dia_atual = f"{dia:02d}/{mes:02d}/{ano}"
-                horarios_dia = []
+    if dia_atual:
+        registros.append((dia_atual, horarios_dia[:12]))
 
-                if any(oc in linha_upper for oc in ["FERIADO","FALTA","ABN/DEC.CHEFIA","LICENÇA","D.S.R"]):
-                    registros_dict[dia_atual] = []
-                    dia_atual = None
-                    continue
-
-                horarios = re.findall(r"\d{2}:\d{2}", linha_strip)
-                if horarios:
-                    horarios = horarios[1:]  # ignora jornada
-                    horarios_dia.extend(horarios)
-            else:
-                if dia_atual:
-                    horarios_extra = re.findall(r"\b\d{2}:\d{2}\b", linha_strip)
-                    horarios_dia.extend(horarios_extra)
-
-        # salva último dia da página
-        if dia_atual and len(horarios_dia) >= 2:
-            pares_validos = []
-            for i in range(0, len(horarios_dia), 2):
-                if i+1 < len(horarios_dia):
-                    pares_validos.append(horarios_dia[i:i+2])
-            if dia_atual in registros_dict:
-                registros_dict[dia_atual].extend(pares_validos)
-            else:
-                registros_dict[dia_atual] = pares_validos
-
-    # Remove datas inválidas e espaços
-    registros_dict = {
-        d.strip(): pares for d, pares in registros_dict.items()
-        if d and re.match(r"\d{2}/\d{2}/\d{4}", d.strip())
-    }
-
+    if not registros: return pd.DataFrame()
     estrutura = {"Data":[]}
-    for i in range(1,7):
-        estrutura[f"Entrada{i}"]=[]
-        estrutura[f"Saída{i}"]=[]
+    for i in range(1,7): estrutura[f"Entrada{i}"]=[]; estrutura[f"Saída{i}"]=[]
 
-    # ordenar datas válidas
-    datas_validas = []
-    for d in registros_dict.keys():
-        try:
-            datas_validas.append(datetime.strptime(d, "%d/%m/%Y"))
-        except:
-            pass
-    datas_validas.sort()
-
-    for data_obj in datas_validas:
-        data = data_obj.strftime("%d/%m/%Y")
+    for data, horarios in registros:
         estrutura["Data"].append(data)
-        pares_list = registros_dict.get(data, [])
-        pares = [h for par in pares_list for h in par] + [""]*(12 - sum(len(par) for par in pares_list))
+        pares = horarios + [""]*(12-len(horarios))
         for i in range(6):
-            estrutura[f"Entrada{i+1}"].append(pares[2*i] if 2*i < len(pares) else "")
-            estrutura[f"Saída{i+1}"].append(pares[2*i+1] if 2*i+1 < len(pares) else "")
-
+            estrutura[f"Entrada{i+1}"].append(pares[2*i])
+            estrutura[f"Saída{i+1}"].append(pares[2*i+1])
     return pd.DataFrame(estrutura)
 
 # --------------------------
@@ -267,14 +229,28 @@ def processar_layout_caixa(texto_pdf):
 if uploaded_file:
     with st.spinner("⏳ Processando..."):
         with pdfplumber.open(uploaded_file) as pdf:
-            texto = "\n".join(page.extract_text() or "" for page in pdf.pages)
+            texto_total = []
+            for page in pdf.pages:
+                texto_pagina = page.extract_text() or ""
+                texto_total.append(texto_pagina)
+        texto = "\n".join(texto_total)
+
         layout = detectar_layout(texto)
         if layout == "caixa":
-            df = processar_layout_caixa(texto)
+            # Processa cada página separadamente para pegar mês correto
+            dfs = []
+            with pdfplumber.open(uploaded_file) as pdf:
+                for page in pdf.pages:
+                    texto_pagina = page.extract_text() or ""
+                    df_pagina = processar_layout_caixa(texto_pagina)
+                    if not df_pagina.empty:
+                        dfs.append(df_pagina)
+            df = pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
         elif layout == "novo":
             df = processar_layout_novo(texto)
         else:
             df = processar_layout_antigo(texto)
+
         if not df.empty:
             st.success("✅ Conversão concluída com sucesso!")
             st.dataframe(df, use_container_width=True)
