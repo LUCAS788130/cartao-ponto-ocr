@@ -3,50 +3,90 @@ import pdfplumber
 import pandas as pd
 import re
 from datetime import datetime, timedelta
-import pytesseract
-from PIL import Image
-import io
 
-st.set_page_config(page_title="CARTÃO DE PONTO ➜ CSV")
-st.markdown("<h1 style='text-align: center;'>🕒 CONVERSOR UNIVERSAL DE CARTÃO DE PONTO</h1>", unsafe_allow_html=True)
+# --------------------------
+# Configuração inicial
+# --------------------------
+st.set_page_config(page_title="CARTÃO DE PONTO ➜ CSV", layout="wide")
 
-uploaded_file = st.file_uploader("📎 Envie o cartão de ponto em PDF ou imagem", type=["pdf","png","jpg","jpeg"])
+# CSS customizado para imersão
+st.markdown("""
+    <style>
+        body {
+            background: linear-gradient(120deg, #1f1c2c, #928dab);
+            color: #f5f5f5;
+        }
+        .main {
+            background: rgba(0, 0, 0, 0.15);
+            border-radius: 15px;
+            padding: 20px;
+        }
+        h1 {
+            font-size: 40px !important;
+            color: #ffffff !important;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .stButton>button {
+            background: #4CAF50;
+            color: white;
+            border-radius: 10px;
+            padding: 0.6em 1.2em;
+            font-weight: bold;
+            transition: 0.3s;
+        }
+        .stButton>button:hover {
+            background: #45a049;
+            transform: scale(1.05);
+        }
+        .stDownloadButton>button {
+            background: #1976D2;
+            color: white;
+            border-radius: 10px;
+            padding: 0.6em 1.2em;
+            font-weight: bold;
+        }
+        .stDownloadButton>button:hover {
+            background: #0D47A1;
+            transform: scale(1.05);
+        }
+        .footer {
+            text-align: center;
+            font-size: 13px;
+            color: #ddd;
+            margin-top: 50px;
+        }
+    </style>
+""", unsafe_allow_html=True)
 
-# ---------------------------
-# Função de OCR para PDFs escaneados ou imagens
-# ---------------------------
-def extrair_texto_ocr(file):
-    if file.type == "application/pdf":
-        texto_total = ""
-        with pdfplumber.open(file) as pdf:
-            for page in pdf.pages:
-                imagem = page.to_image(resolution=300).original
-                texto_total += pytesseract.image_to_string(imagem, lang='por') + "\n"
-        return texto_total
-    else:  # imagem direta
-        imagem = Image.open(file)
-        return pytesseract.image_to_string(imagem, lang='por')
+# --------------------------
+# Título
+# --------------------------
+st.markdown("<h1>🕒 Conversor Inteligente de Cartão de Ponto</h1>", unsafe_allow_html=True)
 
-# ---------------------------
-# Função de detecção de layout
-# ---------------------------
+# --------------------------
+# Upload do PDF
+# --------------------------
+uploaded_file = st.file_uploader("📎 Envie o cartão de ponto em PDF", type="pdf")
+
+# --------------------------
+# Funções (mesmas do código anterior)
+# --------------------------
 def detectar_layout(texto):
+    if "SISTEMA DE PONTO ELETRONICO" in texto and "CAIXA - SIPON" in texto:
+        return "caixa"
     linhas = texto.split("\n")
     for linha in linhas:
-        if re.search(r"\d{2}/\d{2}/\d{4}", linha):
+        if re.match(r"\d{2}/\d{2}/\d{4}", linha):
             partes = linha.split()
             if len(partes) >= 5 and any(o in linha.upper() for o in ["FERIADO", "D.S.R", "INTEGRAÇÃO", "FALTA", "LICENÇA REMUNERADA - D"]):
                 return "novo"
     return "antigo"
 
-# ---------------------------
-# Função de processamento layout antigo
-# ---------------------------
 def processar_layout_antigo(texto):
     linhas = [linha.strip() for linha in texto.split("\n") if linha.strip()]
     registros = {}
     def eh_horario(p): return ":" in p and len(p) == 5 and p.replace(":", "").isdigit()
-
     for ln in linhas:
         partes = ln.split()
         if len(partes) >= 2 and "/" in partes[0]:
@@ -57,7 +97,6 @@ def processar_layout_antigo(texto):
                 horarios = [p for p in pos_dia if eh_horario(p)]
                 registros[data] = [] if tem_ocorrencia else horarios
             except: pass
-
     if registros:
         inicio = min(registros.keys())
         fim = max(registros.keys())
@@ -75,41 +114,33 @@ def processar_layout_antigo(texto):
         return pd.DataFrame(tabela)
     return pd.DataFrame()
 
-# ---------------------------
-# Função de processamento layout novo / universal
-# ---------------------------
 def processar_layout_novo(texto):
     linhas = texto.split("\n")
     registros = []
-
     ocorrencias_que_zeram = [
         "D.S.R","FERIADO","FÉRIAS","FALTA","ATESTADO","FERIAS","DISPENSA",
         "INTEGRAÇÃO","LICENÇA REMUNERADA","SUSPENSÃO","DESLIGAMENTO",
         "COMPENSA DIA","FOLGA COMPENSATÓRIA","ATESTADO MÉDICO"
     ]
-
     for linha in linhas:
-        match = re.search(r"(\d{2}/\d{2}/\d{4})", linha)
+        match = re.match(r"(\d{2}/\d{2}/\d{4})", linha)
         if match:
             data_str = match.group(1)
             linha_upper = linha.upper()
-            # Exceção para DISPENSA FALTA DE PRODUÇÃO - P
             if any(oc in linha_upper for oc in ocorrencias_que_zeram) and \
                "SAÍDA ANTECIPADA" not in linha_upper and \
                "ATRASO" not in linha_upper and \
                "DISPENSA FALTA DE PRODUÇÃO - P" not in linha_upper:
                 registros.append((data_str, []))
                 continue
-            # Extrair apenas a parte de marcações
             corte_ocorrencias = r"\s+(HORA|D\.S\.R|FALTA|FERIADO|FÉRIAS|ATESTADO|DISPENSA|SAÍDA ANTECIPADA|INTEGRAÇÃO|SUSPENSÃO|DESLIGAMENTO|FOLGA|COMPENSA|ATRASO)"
             parte_marcacoes = re.split(corte_ocorrencias, linha_upper)[0]
             horarios = re.findall(r"\d{2}:\d{2}[a-z]?", parte_marcacoes)
             horarios = [h[:-1] if h[-1].isalpha() else h for h in horarios]
             horarios = [h for h in horarios if re.match(r"\d{2}:\d{2}", h)]
             if len(horarios)%2 !=0: horarios = horarios[:-1]
-            horarios = horarios[:12]  # 6 pares no máximo
+            horarios = horarios[:12]
             registros.append((data_str, horarios))
-
     if not registros: return pd.DataFrame()
     df = pd.DataFrame(registros, columns=["Data","Horários"])
     df["Data"] = pd.to_datetime(df["Data"], dayfirst=True)
@@ -117,11 +148,8 @@ def processar_layout_novo(texto):
     data_fim = df["Data"].max()
     todas_datas = [(data_inicio + timedelta(days=i)).strftime("%d/%m/%Y") for i in range((data_fim - data_inicio).days+1)]
     registros_dict = {d.strftime("%d/%m/%Y"):h for d,h in zip(df["Data"],df["Horários"])}
-
     estrutura = {"Data":[]}
-    for i in range(1,7):
-        estrutura[f"Entrada{i}"]=[]
-        estrutura[f"Saída{i}"]=[]
+    for i in range(1,7): estrutura[f"Entrada{i}"]=[]; estrutura[f"Saída{i}"]=[]
     for data in todas_datas:
         estrutura["Data"].append(data)
         horarios = registros_dict.get(data, [])
@@ -131,50 +159,64 @@ def processar_layout_novo(texto):
             estrutura[f"Saída{i+1}"].append(pares[2*i+1])
     return pd.DataFrame(estrutura)
 
-# ---------------------------
-# Fluxo principal
-# ---------------------------
+def processar_layout_caixa(texto):
+    linhas = texto.split("\n")
+    registros = []
+    mes_ano = re.search(r"Mes/Ano\s*:\s*(\d+)\s*/\s*(\d+)", texto)
+    mes, ano = (int(mes_ano.group(1)), int(mes_ano.group(2))) if mes_ano else (1,2000)
+    ocorrencias_que_zeram = ["FERIADO","FALTA","ABN/DEC.CHEFIA","LICENÇA","D.S.R"]
+    for linha in linhas:
+        match = re.match(r"\s*(\d{1,2})\s*-\s*[A-Z]{3}", linha.strip())
+        if match:
+            dia = int(match.group(1))
+            data_str = f"{dia:02d}/{mes:02d}/{ano}"
+            linha_upper = linha.upper()
+            if any(oc in linha_upper for oc in ocorrencias_que_zeram):
+                registros.append((data_str, []))
+                continue
+            horarios = re.findall(r"\d{2}:\d{2}", linha)
+            if horarios: horarios = horarios[1:]
+            if len(horarios)%2 !=0: horarios = horarios[:-1]
+            horarios = horarios[:4]
+            registros.append((data_str, horarios))
+    if not registros: return pd.DataFrame()
+    estrutura = {"Data":[],"Entrada1":[],"Saída1":[],"Entrada2":[],"Saída2":[]}
+    for data, horarios in registros:
+        estrutura["Data"].append(data)
+        pares = horarios + [""]*(4-len(horarios))
+        estrutura["Entrada1"].append(pares[0]); estrutura["Saída1"].append(pares[1])
+        estrutura["Entrada2"].append(pares[2]); estrutura["Saída2"].append(pares[3])
+    return pd.DataFrame(estrutura)
+
+# --------------------------
+# Principal
+# --------------------------
 if uploaded_file:
     with st.spinner("⏳ Processando..."):
-        # Extrair texto: OCR se necessário
-        try:
-            texto = ""
-            if uploaded_file.type == "application/pdf":
-                with pdfplumber.open(uploaded_file) as pdf:
-                    # Tenta extrair texto normal
-                    for page in pdf.pages:
-                        texto += page.extract_text() or ""
-                if not texto.strip():  # sem texto, aplicar OCR
-                    texto = extrair_texto_ocr(uploaded_file)
-            else:
-                texto = extrair_texto_ocr(uploaded_file)
-        except Exception as e:
-            st.error(f"Erro ao processar o arquivo: {e}")
-            texto = ""
-
-        if texto.strip():
-            layout = detectar_layout(texto)
-            st.info(f"📄 Layout detectado: **{layout.upper()}**")
-            if layout == "novo":
-                df = processar_layout_novo(texto)
-            else:
-                df = processar_layout_antigo(texto)
-
-            if not df.empty:
-                st.success("✅ Conversão concluída com sucesso!")
-                st.dataframe(df, use_container_width=True)
-                csv = df.to_csv(index=False).encode("utf-8")
-                st.download_button("⬇️ Baixar CSV", data=csv, file_name="cartao_convertido.csv", mime="text/csv")
-            else:
-                st.warning("❌ Não foi possível extrair os dados do cartão.")
+        with pdfplumber.open(uploaded_file) as pdf:
+            texto = "\n".join(page.extract_text() or "" for page in pdf.pages)
+        layout = detectar_layout(texto)
+        if layout == "caixa":
+            df = processar_layout_caixa(texto)
+        elif layout == "novo":
+            df = processar_layout_novo(texto)
         else:
-            st.warning("❌ Nenhum texto detectado no arquivo.")
+            df = processar_layout_antigo(texto)
+        if not df.empty:
+            st.success("✅ Conversão concluída com sucesso!")
+            st.dataframe(df, use_container_width=True)
+            csv = df.to_csv(index=False).encode("utf-8")
+            st.download_button("⬇️ Baixar CSV", data=csv, file_name="cartao_convertido.csv", mime="text/csv")
+        else:
+            st.warning("❌ Não foi possível extrair os dados do cartão.")
 
+# --------------------------
+# Rodapé
+# --------------------------
 st.markdown("""
-<hr>
-<p style='text-align: center; font-size: 13px;'>
+<div class="footer">
 🔒 Este site está em conformidade com a <strong>Lei Geral de Proteção de Dados (LGPD)</strong>.<br>
 Os arquivos enviados são utilizados apenas para conversão e não são armazenados nem compartilhados.<br>
 👨‍💻 Desenvolvido por <strong>Lucas de Matos Coelho</strong>
-</p>
+</div>
 """, unsafe_allow_html=True)
