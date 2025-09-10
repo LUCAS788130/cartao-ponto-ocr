@@ -144,7 +144,9 @@ def processar_layout_novo(texto):
             horarios = re.findall(r"\d{2}:\d{2}[a-z]?", parte_marcacoes)
             horarios = [h[:-1] if h[-1].isalpha() else h for h in horarios]
             horarios = [h for h in horarios if re.match(r"\d{2}:\d{2}", h)]
-            if len(horarios)%2 !=0: horarios = horarios[:-1]
+            # Garante pares
+            if len(horarios) % 2 != 0:
+                horarios = horarios[:-1]
             horarios = horarios[:12]
             registros.append((data_str, horarios))
     if not registros: return pd.DataFrame()
@@ -171,54 +173,61 @@ def processar_layout_novo(texto):
 def processar_layout_caixa(texto_pdf):
     registros_dict = {}
 
-    # Processa página por página
-    paginas = texto_pdf.split("\f")  # separa páginas
+    paginas = texto_pdf.split("\f")
     for page_text in paginas:
         linhas = page_text.split("\n")
-
-        # Detecta mês/ano da página
         mes_ano = re.search(r"Mes/Ano\s*:\s*(\d+)\s*/\s*(\d+)", page_text)
         mes, ano = (int(mes_ano.group(1)), int(mes_ano.group(2))) if mes_ano else (1, 2000)
 
         dia_atual = None
+        horarios_dia = []
+
         for linha in linhas:
             linha_upper = linha.upper()
 
-            # Ignora colunas de contagem de tempo
+            # Ignora colunas de contagem
             if "QTDE" in linha_upper or "QUANTIDADE" in linha_upper:
                 continue
 
             # Detecta nova data
             match = re.match(r"\s*(\d{1,2})\s*-\s*[A-Z]{3}", linha.strip())
             if match:
+                if dia_atual and len(horarios_dia) >= 2:
+                    pares = horarios_dia[:12]
+                    registros_dict[dia_atual] = [pares[i:i+2] for i in range(0, len(pares), 2)]
                 dia = int(match.group(1))
                 dia_atual = f"{dia:02d}/{mes:02d}/{ano}"
+                horarios_dia = []
+
                 if any(oc in linha_upper for oc in ["FERIADO","FALTA","ABN/DEC.CHEFIA","LICENÇA","D.S.R"]):
                     registros_dict[dia_atual] = []
                     dia_atual = None
                     continue
+
                 horarios = re.findall(r"\d{2}:\d{2}", linha)
                 if horarios:
-                    horarios = horarios[1:]  # ignora Jornada
-                    registros_dict[dia_atual] = horarios
+                    horarios = horarios[1:]
+                    horarios_dia.extend(horarios)
             else:
                 if dia_atual:
                     horarios_extra = re.findall(r"\d{2}:\d{2}", linha)
-                    registros_dict.setdefault(dia_atual, [])
-                    registros_dict[dia_atual].extend(horarios_extra)
+                    horarios_dia.extend(horarios_extra)
 
-    # Monta DataFrame final
+        if dia_atual and len(horarios_dia) >= 2:
+            pares = horarios_dia[:12]
+            registros_dict[dia_atual] = [pares[i:i+2] for i in range(0, len(pares), 2)]
+
     estrutura = {"Data":[]}
     for i in range(1,7):
         estrutura[f"Entrada{i}"]=[]
         estrutura[f"Saída{i}"]=[]
 
-    for data, horarios in sorted(registros_dict.items(), key=lambda x: datetime.strptime(x[0], "%d/%m/%Y")):
+    for data, pares_list in sorted(registros_dict.items(), key=lambda x: datetime.strptime(x[0], "%d/%m/%Y")):
         estrutura["Data"].append(data)
-        pares = horarios[:12] + [""]*(12-len(horarios[:12]))
+        pares = [h for par in pares_list for h in par] + [""]*(12 - sum(len(par) for par in pares_list))
         for i in range(6):
-            estrutura[f"Entrada{i+1}"].append(pares[2*i])
-            estrutura[f"Saída{i+1}"].append(pares[2*i+1])
+            estrutura[f"Entrada{i+1}"].append(pares[2*i] if 2*i < len(pares) else "")
+            estrutura[f"Saída{i+1}"].append(pares[2*i+1] if 2*i+1 < len(pares) else "")
 
     return pd.DataFrame(estrutura)
 
