@@ -70,7 +70,7 @@ st.markdown("<h1>🕒 Conversor Inteligente de Cartão de Ponto</h1>", unsafe_al
 uploaded_file = st.file_uploader("📎 Envie o cartão de ponto em PDF", type="pdf")
 
 # --------------------------
-# Detectar layout (uso interno)
+# Detectar layout
 # --------------------------
 def detectar_layout(texto):
     if "SISTEMA DE PONTO ELETRONICO" in texto and "CAIXA - SIPON" in texto:
@@ -166,55 +166,56 @@ def processar_layout_novo(texto):
     return pd.DataFrame(estrutura)
 
 # --------------------------
-# Layout CAIXA - SIPON (ajustado)
+# Layout CAIXA - SIPON (corrigido)
 # --------------------------
-def processar_layout_caixa(texto):
-    linhas = texto.split("\n")
-    registros_dict = {}  # chave: data, valor: lista de horários
-    ocorrencias_que_zeram = ["FERIADO","FALTA","ABN/DEC.CHEFIA","LICENÇA","D.S.R"]
+def processar_layout_caixa(texto_pdf):
+    registros_dict = {}
 
-    # Detecta mês/ano da página
-    mes_ano = re.search(r"Mes/Ano\s*:\s*(\d+)\s*/\s*(\d+)", texto)
-    mes, ano = (int(mes_ano.group(1)), int(mes_ano.group(2))) if mes_ano else (1, 2000)
+    # Processa página por página
+    paginas = texto_pdf.split("\f")  # separa páginas
+    for page_text in paginas:
+        linhas = page_text.split("\n")
 
-    dia_atual = None
+        # Detecta mês/ano da página
+        mes_ano = re.search(r"Mes/Ano\s*:\s*(\d+)\s*/\s*(\d+)", page_text)
+        mes, ano = (int(mes_ano.group(1)), int(mes_ano.group(2))) if mes_ano else (1, 2000)
 
-    for linha in linhas:
-        linha_upper = linha.upper()
+        dia_atual = None
+        for linha in linhas:
+            linha_upper = linha.upper()
 
-        # Ignora linhas de contagem de tempo
-        if "QTDE" in linha_upper or "QUANTIDADE" in linha_upper:
-            continue
-
-        # Detecta nova data
-        match = re.match(r"\s*(\d{1,2})\s*-\s*[A-Z]{3}", linha.strip())
-        if match:
-            dia = int(match.group(1))
-            dia_atual = f"{dia:02d}/{mes:02d}/{ano}"
-            if any(oc in linha_upper for oc in ocorrencias_que_zeram):
-                registros_dict[dia_atual] = []  # zera horários do dia
-                dia_atual = None
+            # Ignora colunas de contagem de tempo
+            if "QTDE" in linha_upper or "QUANTIDADE" in linha_upper:
                 continue
-            horarios = re.findall(r"\d{2}:\d{2}", linha)
-            if horarios:
-                horarios = horarios[1:]  # ignora Jornada
-                registros_dict[dia_atual] = horarios
-        else:
-            # Acumula horários de linhas seguintes do mesmo dia
-            if dia_atual:
-                horarios_extra = re.findall(r"\d{2}:\d{2}", linha)
-                registros_dict.setdefault(dia_atual, [])
-                registros_dict[dia_atual].extend(horarios_extra)
 
-    # Criar DataFrame com 6 pares de entrada/saída
+            # Detecta nova data
+            match = re.match(r"\s*(\d{1,2})\s*-\s*[A-Z]{3}", linha.strip())
+            if match:
+                dia = int(match.group(1))
+                dia_atual = f"{dia:02d}/{mes:02d}/{ano}"
+                if any(oc in linha_upper for oc in ["FERIADO","FALTA","ABN/DEC.CHEFIA","LICENÇA","D.S.R"]):
+                    registros_dict[dia_atual] = []
+                    dia_atual = None
+                    continue
+                horarios = re.findall(r"\d{2}:\d{2}", linha)
+                if horarios:
+                    horarios = horarios[1:]  # ignora Jornada
+                    registros_dict[dia_atual] = horarios
+            else:
+                if dia_atual:
+                    horarios_extra = re.findall(r"\d{2}:\d{2}", linha)
+                    registros_dict.setdefault(dia_atual, [])
+                    registros_dict[dia_atual].extend(horarios_extra)
+
+    # Monta DataFrame final
     estrutura = {"Data":[]}
     for i in range(1,7):
         estrutura[f"Entrada{i}"]=[]
         estrutura[f"Saída{i}"]=[]
 
-    for data, horarios in registros_dict.items():
+    for data, horarios in sorted(registros_dict.items(), key=lambda x: datetime.strptime(x[0], "%d/%m/%Y")):
         estrutura["Data"].append(data)
-        pares = horarios[:12] + [""]*(12-len(horarios[:12]))  # até 6 pares
+        pares = horarios[:12] + [""]*(12-len(horarios[:12]))
         for i in range(6):
             estrutura[f"Entrada{i+1}"].append(pares[2*i])
             estrutura[f"Saída{i+1}"].append(pares[2*i+1])
@@ -227,14 +228,15 @@ def processar_layout_caixa(texto):
 if uploaded_file:
     with st.spinner("⏳ Processando..."):
         with pdfplumber.open(uploaded_file) as pdf:
-            texto = "\n".join(page.extract_text() or "" for page in pdf.pages)
-        layout = detectar_layout(texto)
+            texto_pdf = "\f".join(page.extract_text() or "" for page in pdf.pages)
+        layout = detectar_layout(texto_pdf)
         if layout == "caixa":
-            df = processar_layout_caixa(texto)
+            df = processar_layout_caixa(texto_pdf)
         elif layout == "novo":
-            df = processar_layout_novo(texto)
+            df = processar_layout_novo(texto_pdf)
         else:
-            df = processar_layout_antigo(texto)
+            df = processar_layout_antigo(texto_pdf)
+
         if not df.empty:
             st.success("✅ Conversão concluída com sucesso!")
             st.dataframe(df, use_container_width=True)
