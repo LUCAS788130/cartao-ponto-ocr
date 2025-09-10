@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 # --------------------------
 st.set_page_config(page_title="CARTÃO DE PONTO ➜ CSV", layout="wide")
 
-# CSS customizado para imersão
+# CSS customizado
 st.markdown("""
     <style>
         body {
@@ -70,7 +70,7 @@ st.markdown("<h1>🕒 Conversor Inteligente de Cartão de Ponto</h1>", unsafe_al
 uploaded_file = st.file_uploader("📎 Envie o cartão de ponto em PDF", type="pdf")
 
 # --------------------------
-# Funções (mesmas do código anterior)
+# Detectar layout (uso interno)
 # --------------------------
 def detectar_layout(texto):
     if "SISTEMA DE PONTO ELETRONICO" in texto and "CAIXA - SIPON" in texto:
@@ -83,6 +83,9 @@ def detectar_layout(texto):
                 return "novo"
     return "antigo"
 
+# --------------------------
+# Layout antigo
+# --------------------------
 def processar_layout_antigo(texto):
     linhas = [linha.strip() for linha in texto.split("\n") if linha.strip()]
     registros = {}
@@ -114,6 +117,9 @@ def processar_layout_antigo(texto):
         return pd.DataFrame(tabela)
     return pd.DataFrame()
 
+# --------------------------
+# Layout novo
+# --------------------------
 def processar_layout_novo(texto):
     linhas = texto.split("\n")
     registros = []
@@ -159,33 +165,54 @@ def processar_layout_novo(texto):
             estrutura[f"Saída{i+1}"].append(pares[2*i+1])
     return pd.DataFrame(estrutura)
 
+# --------------------------
+# Layout CAIXA - SIPON
+# --------------------------
 def processar_layout_caixa(texto):
     linhas = texto.split("\n")
     registros = []
     mes_ano = re.search(r"Mes/Ano\s*:\s*(\d+)\s*/\s*(\d+)", texto)
     mes, ano = (int(mes_ano.group(1)), int(mes_ano.group(2))) if mes_ano else (1,2000)
     ocorrencias_que_zeram = ["FERIADO","FALTA","ABN/DEC.CHEFIA","LICENÇA","D.S.R"]
+
+    dia_atual = None
+    horarios_dia = []
+
     for linha in linhas:
         match = re.match(r"\s*(\d{1,2})\s*-\s*[A-Z]{3}", linha.strip())
         if match:
+            if dia_atual:
+                registros.append((dia_atual, horarios_dia[:12]))
             dia = int(match.group(1))
-            data_str = f"{dia:02d}/{mes:02d}/{ano}"
+            dia_atual = f"{dia:02d}/{mes:02d}/{ano}"
+            horarios_dia = []
+
             linha_upper = linha.upper()
             if any(oc in linha_upper for oc in ocorrencias_que_zeram):
-                registros.append((data_str, []))
+                registros.append((dia_atual, []))
+                dia_atual = None
                 continue
+
             horarios = re.findall(r"\d{2}:\d{2}", linha)
-            if horarios: horarios = horarios[1:]
-            if len(horarios)%2 !=0: horarios = horarios[:-1]
-            horarios = horarios[:4]
-            registros.append((data_str, horarios))
+            if horarios: horarios = horarios[1:]  # ignora Jornada
+            horarios_dia.extend(horarios)
+        else:
+            if dia_atual:
+                horarios_extra = re.findall(r"\d{2}:\d{2}", linha)
+                horarios_dia.extend(horarios_extra)
+
+    if dia_atual:
+        registros.append((dia_atual, horarios_dia[:12]))
+
     if not registros: return pd.DataFrame()
-    estrutura = {"Data":[],"Entrada1":[],"Saída1":[],"Entrada2":[],"Saída2":[]}
+    estrutura = {"Data":[]}
+    for i in range(1,7): estrutura[f"Entrada{i}"]=[]; estrutura[f"Saída{i}"]=[]
     for data, horarios in registros:
         estrutura["Data"].append(data)
-        pares = horarios + [""]*(4-len(horarios))
-        estrutura["Entrada1"].append(pares[0]); estrutura["Saída1"].append(pares[1])
-        estrutura["Entrada2"].append(pares[2]); estrutura["Saída2"].append(pares[3])
+        pares = horarios + [""]*(12-len(horarios))
+        for i in range(6):
+            estrutura[f"Entrada{i+1}"].append(pares[2*i])
+            estrutura[f"Saída{i+1}"].append(pares[2*i+1])
     return pd.DataFrame(estrutura)
 
 # --------------------------
