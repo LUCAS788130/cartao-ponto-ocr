@@ -155,7 +155,7 @@ def processar_layout_novo(texto):
     todas_datas = [(data_inicio + timedelta(days=i)).strftime("%d/%m/%Y") for i in range((data_fim - data_inicio).days+1)]
     registros_dict = {d.strftime("%d/%m/%Y"):h for d,h in zip(df["Data"],df["Horários"])}
     estrutura = {"Data":[]}
-    for i in range(1,7): estrutura[f"Entrada{i}"]=[]; estrutura[f"Saída{i}"]=[]
+    for i in range(1,7): estrutura[f"Entrada{i}"]=[]; estrutura[f"Saída{i}"]=[] 
     for data in todas_datas:
         estrutura["Data"].append(data)
         horarios = registros_dict.get(data, [])
@@ -166,17 +166,24 @@ def processar_layout_novo(texto):
     return pd.DataFrame(estrutura)
 
 # --------------------------
-# Layout CAIXA - SIPON
+# Layout CAIXA - SIPON (ajustado para mês/ano por página)
 # --------------------------
 def processar_layout_caixa(texto):
     linhas = texto.split("\n")
     registros = []
-    mes_ano = re.search(r"Mes/Ano\s*:\s*(\d+)\s*/\s*(\d+)", texto)
-    mes, ano = (int(mes_ano.group(1)), int(mes_ano.group(2))) if mes_ano else (1,2000)
+
     ocorrencias_que_zeram = ["FERIADO","FALTA","ABN/DEC.CHEFIA","LICENÇA","D.S.R"]
 
     dia_atual = None
     horarios_dia = []
+    mes, ano = None, None  # inicializa mês/ano por página
+
+    # Verifica se existe indicação de mês/ano nesta página
+    mes_ano = re.search(r"Mes/Ano\s*:\s*(\d+)\s*/\s*(\d+)", texto)
+    if mes_ano:
+        mes, ano = int(mes_ano.group(1)), int(mes_ano.group(2))
+    else:
+        mes, ano = 1, 2000  # padrão caso não encontre
 
     for linha in linhas:
         match = re.match(r"\s*(\d{1,2})\s*-\s*[A-Z]{3}", linha.strip())
@@ -207,6 +214,7 @@ def processar_layout_caixa(texto):
     if not registros: return pd.DataFrame()
     estrutura = {"Data":[]}
     for i in range(1,7): estrutura[f"Entrada{i}"]=[]; estrutura[f"Saída{i}"]=[]
+
     for data, horarios in registros:
         estrutura["Data"].append(data)
         pares = horarios + [""]*(12-len(horarios))
@@ -221,14 +229,28 @@ def processar_layout_caixa(texto):
 if uploaded_file:
     with st.spinner("⏳ Processando..."):
         with pdfplumber.open(uploaded_file) as pdf:
-            texto = "\n".join(page.extract_text() or "" for page in pdf.pages)
+            texto_total = []
+            for page in pdf.pages:
+                texto_pagina = page.extract_text() or ""
+                texto_total.append(texto_pagina)
+        texto = "\n".join(texto_total)
+
         layout = detectar_layout(texto)
         if layout == "caixa":
-            df = processar_layout_caixa(texto)
+            # Processa cada página separadamente para pegar mês correto
+            dfs = []
+            with pdfplumber.open(uploaded_file) as pdf:
+                for page in pdf.pages:
+                    texto_pagina = page.extract_text() or ""
+                    df_pagina = processar_layout_caixa(texto_pagina)
+                    if not df_pagina.empty:
+                        dfs.append(df_pagina)
+            df = pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
         elif layout == "novo":
             df = processar_layout_novo(texto)
         else:
             df = processar_layout_antigo(texto)
+
         if not df.empty:
             st.success("✅ Conversão concluída com sucesso!")
             st.dataframe(df, use_container_width=True)
